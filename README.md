@@ -62,14 +62,36 @@ ty.compose(
 )
 ```
 
-### chain
+### stack
+
+```js
+transy.stack(function () {
+    this
+    .map()
+    .filter()
+    .map()
+})
+```
+
+with arrow function:
 
 ```js
 var ty = require('transy')
 
-ty.chain(c => c
+ty.stack(c => c
     .map()
     .filter()
     .map()
 )
+```
+
+with coffee-script:
+
+```coffee
+ty = require 'transy'
+
+ty.stack ->
+  @map (x) -> x + 1
+  @filter (x) -> x > 10
+  @map (x) -> x.toString()
 ```
