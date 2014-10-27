@@ -15,8 +15,8 @@
     "through2": "0.6.1"
   },
   "devDependencies": {
-    "fast.js": "0.0.4",
-    "transducers-js": "^0.4.132",
-    "transducers.js": "^0.2.2"
+    "fast.js": "0.0.5",
+    "transducers-js": "^0.4.135",
+    "transducers.js": "^0.2.3"
   }
 }
