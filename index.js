@@ -1,11 +1,22 @@
 'use strict';
 
-var assert = require('assert')
 var thunk = require('gocsp-thunk')
 var methods = require('./methods')
 
 var compose = methods.compose
 var slice = Array.prototype.slice
+
+function noop() {}
+
+function pass()  {
+    return true
+}
+
+function check(isDone) {
+    if (!isDone) {
+        throw new Error('')
+    }
+}
 
 // export all methods
 Object.keys(methods).forEach(function (name) {
@@ -14,45 +25,41 @@ Object.keys(methods).forEach(function (name) {
 exports.methods = methods
 
 // src is array-like or iterator
-function sync(src /* xform... */) {
-    var xform = compose(slice.call(arguments, 1))
-    var result = void 0
-    var isDone = false
-    var isError = false
+function sync(xform, src) {
+    var result, isDone = false
 
-    var produce = xform(function (done, value) {
-        if (done) {
-            isDone = true
-            result = value
-        }
-        return done
+    // var [next, close]
+    var pair = xform(pass, function onFlush(value) {
+        isDone = true
+        result = value
     })
+    var next = pair[0], close = pair[1]
 
     // src is array-like (array, arguments)
     var len = src.length
     if (len === +len) {
         for (var i = 0; i < len; i++) {
-            if (produce(false, src[i])) {
-                assert(isDone)
+            if (next(src[i]) === false) {
+                check(isDone)
                 return result // early terimination
             }
         }
-        produce(true, void 0)
-        assert(isDone)
+        close(void 0)
+        check(isDone)
         return result
     }
 
     // iterator, has .next property
-    if (src && typeof src.next === 'function') {
-        var result
-        while (result = src.next(), !result.done) {
-            if (produce(false, result.value)) {
-                assert(isDone)
+    if (typeof src.next === 'function') {
+        var ret
+        while (ret = src.next(), !ret.done) {
+            if (next(ret.value) === false) {
+                check(isDone)
                 return result // early termination
             }
         }
-        produce(true, result.value)
-        assert(isDone)
+        close(ret.value)
+        check(isDone)
         return result
     }
 
@@ -62,68 +69,78 @@ function sync(src /* xform... */) {
 exports.sync = sync
 
 // src is channel, stream
-function async(src /* xform... */) {
-    var args = arguments
-    return thunk(function (cb) {
-        var xform = compose(slice.call(args, 1))
-        var result = void 0
+function async(xform, src) {
+    return thunk(function (done) {
         var isDone = false
         var isError = false
 
-        var produce = xform(function (done, value) {
-            if (done) {
-                cb(null, value)
-            }
-            return done
+        var pair = xform(pass, function onFlush(value) {
+            if (isDone || isError) { return }
+            isDone = true
+            done(null, value)
         })
+        var next = pair[0], close = pair[1]
 
         // readable stream
-        if (src && src.readable && typeof src.on === 'function') {
-            src.on('data', function (data) {
-                // if (!isDone) {
-                    try {
-                        produce(false, data)
-                    } catch (e) {
-                        isDone = true
-                        isError = true
-                        result = e
-                    }
-                // }
-            })
-
-            src.on('error', function (err) {
-                // throw error
-                // cleanup
-                done(err)
-            })
-
-            src.on('end', function () {
+        if (src.readable && typeof src.on === 'function') {
+            src.on('data', function onData(data) {
+                if (isDone || isError) { return }
                 try {
-                    produce(true, void 0)
+                    if (next(data) === false) {
+                        check(isDone)
+                    }
                 } catch (e) {
-                    // to error state
+                    isError = true
+                    done(e)
                 }
             })
-            // clean up
+            src.on('error', function onError(err) {
+                if (isDone || isError) { return }
+                isError = true
+                done(err)
+            })
+            src.on('end', function onEnd() {
+                if (isDone || isError) { return }
+                try {
+                    close(void 0)
+                } catch (e) {
+                    isError = true
+                    done(e)
+                }
+            })
             return
         }
 
         // if it's channel / async iterator protocol
         if (src && typeof src.nextAsync === 'function') {
+            // is nextAsync return a thunk
+            // also support nextAsync return a promise ???
             src.nextAsync()(function next(err, val) {
+                if (isError || isDone) { return }
                 if (err) {
+                    isError = true
                     done(err)
                     return
                 }
                 try {
-                    if (produce(false, val)) {
-                        // finish, should close / throw channel ?
-                        done(null, result)
+                    if (val.done) {
+                        close(val.value)
+                        check(isDone)
+                        return
+                    }
+                    if (next(val.value) === false) {
+                        check(isDone) // early termination
+                        if (typeof src.cancel === 'function') {
+                            src.cancel()
+                        }
                     } else {
-                        // continue, for promise, callback
                         src.nextAsync()(next)
                     }
                 } catch (e) {
+                    isError = true
+                    if (typeof src.cancel === 'function') {
+                        src.cancel()
+                    }
                     done(e)
                 }
             })
@@ -135,54 +152,50 @@ function async(src /* xform... */) {
 }
 exports.async = async
 
-// new Socket(T.pipey(
-//     T.map(...),
-//     T.doSomething(...),
-//     T.doSomething()
+// T.pipey(T.compose(
+//     T.map(),
+//     T.map(),
+//     T.filter()
 // ))
-function pipey(/* xform... */) {
-    var args = arguments
-    return function (input, output, cb) {
-        var xform = compose(args)
-
-        var last = null
-
-        var produce = xform(function (done, value) {
-            if (done) {
-                output.close(value)
-            } else {
-                last = output.put(value)
-            }
-        })
-
-        input.take()(function take(err, res) {
-            if (err) {
-                cb(err)
-                return
-            }
-            try {
-                last = null
-                if (produce(res.done, res.value)) {
-                    // early terimination
-                    // assert(finish)
-                    return
-                }
-                if (last === null) {
-                    // zero ...
-                    input.take()(take)
-                } else {
-                    last(function (err, ok) {
-                        if (err) {
-                            cb(err)
-                        } else {
-                            input.take()(take)
-                        }
-                    })
-                }
-            } catch (e) {
-                cb(e)
-            }
-        })
-    }
-}
-exports.pipey = pipey
+// function pipey(xform, opts) {
+//     return function (input, output, cb) {
+//         var last = null
+//
+//         var pair = xform(function (value) {
+//             last = output.put(value)
+//         }, function onFlush(value) {
+//             output.close(value)
+//         })
+//         var next = pair[0], close = pari[1]
+//
+//         input.take()(function take(err, res) {
+//             if (err) {
+//                 cb(err)
+//                 return
+//             }
+//             try {
+//                 last = null
+//                 if (produce(res.done, res.value)) {
+//                     // early terimination
+//                     // assert(finish)
+//                     return
+//                 }
+//                 if (last === null) {
+//                     // zero ...
+//                     input.take()(take)
+//                 } else {
+//                     last(function (err, ok) {
+//                         if (err) {
+//                             cb(err)
+//                         } else {
+//                             input.take()(take)
+//                         }
+//                     })
+//                 }
+//             } catch (e) {
+//                 cb(e)
+//             }
+//         })
+//     }
+// }
+// exports.pipey = pipey

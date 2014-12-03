@@ -2,20 +2,16 @@
   "name": "transy",
   "version": "0.0.4",
   "description": "",
-  "main": "lib/index.js",
-  "directories": {
-    "test": "test"
-  },
+  "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --harmony test"
   },
   "author": "gyson <eilian.yunsong@gmail.com>",
   "license": "MIT",
-  "dependencies": {
-    "through2": "0.6.1"
-  },
+  "dependencies": {},
   "devDependencies": {
     "fast.js": "0.0.5",
+    "tape": "^3.0.3",
     "transducers-js": "^0.4.135",
     "transducers.js": "^0.2.3"
   }
